@@ -1,0 +1,6 @@
+[submodule "dvc"]
+	path = dvc
+	url = git@github.com:tomazos/dvc.git
+[submodule "spk"]
+	path = spk
+	url = git@github.com:tomazos/spk.git
