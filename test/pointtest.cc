@@ -1,7 +1,6 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -19,6 +18,7 @@
 // #include "spk/presenter.h"
 #include "spk/game.h"
 // #include "spk/rendering.h"
+#include "dvc/log.h"
 
 namespace {
 
@@ -111,7 +111,7 @@ uint32_t find_compatible_memory_type(spk::physical_device& physical_device,
     if (!(memory_requirements.memory_type_bits() & (1 << i))) continue;
     if (memory_properties.memory_types()[i].property_flags() & flags) return i;
   }
-  LOG(FATAL) << "no compatible memory type found";
+  DVC_FATAL("no compatible memory type found");
 }
 
 spk::device_memory create_memory(spk::physical_device& physical_device,

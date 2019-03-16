@@ -40,7 +40,6 @@ cc_binary(
         "skyfly.vert.spv",
     ],
     linkopts = [
-        "-lglog",
         "-lgflags",
         "-lpng",
     ],
@@ -62,7 +61,6 @@ cc_binary(
         "pointtest.vert.spv",
     ],
     linkopts = [
-        "-lglog",
         "-lgflags",
     ],
     deps = [
@@ -83,7 +81,6 @@ cc_binary(
         "triangletest1.vert.spv",
     ],
     linkopts = [
-        "-lglog",
         "-lgflags",
     ],
     deps = [
