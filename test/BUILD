@@ -45,6 +45,7 @@ cc_binary(
     ],
     deps = [
         "//dvc:file",
+        "//dvc:opts",
         "//dvc:terminate",
         "//spk:spkx",
         "//spk:spock",
@@ -65,6 +66,7 @@ cc_binary(
     ],
     deps = [
         "//dvc:file",
+        "//dvc:opts",
         "//dvc:terminate",
         "//spk:spkx",
         "//spk:spock",
@@ -85,6 +87,7 @@ cc_binary(
     ],
     deps = [
         "//dvc:file",
+        "//dvc:opts",
         "//dvc:terminate",
         "//spk:spock",
     ],
