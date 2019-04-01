@@ -38,6 +38,7 @@ cc_binary(
     data = [
         "skyfly.frag.spv",
         "skyfly.vert.spv",
+        "starfield.png",
     ],
     linkopts = [
         "-lgflags",

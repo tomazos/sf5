@@ -312,30 +312,82 @@ struct ImageBuffer {
   spk::buffer buffer;
   spk::device_memory device_memory;
   uint64_t size;
+  spk::image image;
+  spk::device_memory image_memory;
 };
 
-// ImageBuffer create_image_buffer(spk::physical_device& physical_device,
-//                                spk::device& device) {
-//  png::image<png::rgb_pixel, png::solid_pixel_buffer<png::rgb_pixel>> image(
-//      "test/eso09323a.png");
-//  LOG(FATAL) << image.get_width() << " " << image.get_height() << std::endl;
-//
-//  image.get_pixbuf();
-//  spk::buffer buffer =
-//      spkx::create_buffer(device, sizeof(Vertex) * ::num_points,
-//                          spk::buffer_usage_flags::transfer_src);
-//  const spk::memory_requirements memory_requirements =
-//      buffer.memory_requirements();
-//  spk::device_memory device_memory = spkx::create_memory(
-//      device, sizeof(Vertex) * ::num_points,
-//      spkx::find_compatible_memory_type(
-//          physical_device, memory_requirements.memory_type_bits(),
-//          spk::memory_property_flags::host_visible |
-//              spk::memory_property_flags::host_coherent));
-//  buffer.bind_memory(device_memory, 0);
-//
-//  return {std::move(buffer), std::move(device_memory),
-//          memory_requirements.size()};
+spk::image create_image(spk::device& device, uint32_t width, uint32_t height,
+                        spk::format format) {
+  spk::image_create_info create_info;
+  create_info.set_image_type(spk::image_type::n2d);
+  spk::extent_3d extent;
+  extent.set_width(width);
+  extent.set_height(height);
+  extent.set_depth(1);
+  create_info.set_extent(extent);
+  create_info.set_mip_levels(1);
+  create_info.set_array_layers(1);
+  create_info.set_format(format);
+  create_info.set_tiling(spk::image_tiling::optimal);
+  create_info.set_initial_layout(spk::image_layout::undefined);
+  create_info.set_usage(spk::image_usage_flags::transfer_dst |
+                        spk::image_usage_flags::sampled);
+  create_info.set_sharing_mode(spk::sharing_mode::exclusive);
+  create_info.set_samples(spk::sample_count_flags::n1);
+  return device.create_image(create_info);
+}
+
+ImageBuffer create_image_buffer(spk::physical_device& physical_device,
+                                spk::device& device) {
+  png::image<png::rgb_pixel, png::solid_pixel_buffer<png::rgb_pixel>> image(
+      "test/starfield.png");
+  DVC_DUMP(image.get_width());
+  DVC_DUMP(image.get_height());
+
+  const std::vector<png::byte>& bytes = image.get_pixbuf().get_bytes();
+
+  DVC_ASSERT_EQ(image.get_width() * image.get_height() * 3, bytes.size());
+
+  spk::buffer buffer = spkx::create_buffer(
+      device, bytes.size(), spk::buffer_usage_flags::transfer_src);
+
+  const spk::memory_requirements memory_requirements =
+      buffer.memory_requirements();
+  spk::device_memory device_memory = spkx::create_memory(
+      device, memory_requirements.size(),
+      spkx::find_compatible_memory_type(
+          physical_device, memory_requirements.memory_type_bits(),
+          spk::memory_property_flags::host_visible |
+              spk::memory_property_flags::host_coherent));
+  buffer.bind_memory(device_memory, 0);
+
+  void* buf;
+  device_memory.map_memory(0, bytes.size(), buf);
+  std::memcpy(buf, bytes.data(), bytes.size());
+  device_memory.unmap_memory();
+
+  spk::image device_image = create_image(
+      device, image.get_width(), image.get_height(), spk::format::r8g8b8_unorm);
+
+  const spk::memory_requirements image_memory_requirements =
+      device_image.memory_requirements();
+
+  spk::device_memory image_device_memory = spkx::create_memory(
+      device, image_memory_requirements.size(),
+      spkx::find_compatible_memory_type(
+          physical_device, image_memory_requirements.memory_type_bits(),
+          spk::memory_property_flags::device_local));
+  device_image.bind_memory(image_device_memory, 0);
+
+  return {std::move(buffer), std::move(device_memory),
+          memory_requirements.size(), std::move(device_image),
+          std::move(image_device_memory)};
+}
+
+// void immediate_copy_image(spk::device& device) {
+//  spk::command_pool_create_info create_info;
+//  create_info.set_flags(value) spk::command_pool command_pool =
+//      device.create_command_pool();
 //}
 
 struct SkyFly : spkx::game {
@@ -345,6 +397,7 @@ struct SkyFly : spkx::game {
   spk::pipeline pipeline;
   std::vector<VertexBuffer> vertex_buffers;
   std::vector<UniformBuffer> uniform_buffers;
+  ImageBuffer image_buffer;
   spk::descriptor_pool descriptor_pool;
   std::vector<spk::descriptor_set> descriptor_sets;
 
@@ -359,6 +412,7 @@ struct SkyFly : spkx::game {
                                              physical_device(), device())),
         uniform_buffers(create_uniform_buffers(num_renderings(),
                                                physical_device(), device())),
+        image_buffer(create_image_buffer(physical_device(), device())),
         descriptor_pool(create_descriptor_pool(device(), num_renderings())),
         descriptor_sets(create_descriptor_sets(device(), descriptor_pool,
                                                descriptor_set_layout,
@@ -465,6 +519,7 @@ struct SkyFly : spkx::game {
   }
 
   ~SkyFly() {
+    device().free_memory(image_buffer.device_memory);
     for (VertexBuffer& buffer : vertex_buffers) {
       buffer.unmap();
       device().free_memory(buffer.device_memory);
