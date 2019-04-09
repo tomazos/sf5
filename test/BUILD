@@ -30,6 +30,16 @@ glsl_shader(
     src = "skyfly.frag",
 )
 
+glsl_shader(
+    name = "stars_vert",
+    src = "stars.vert",
+)
+
+glsl_shader(
+    name = "stars_frag",
+    src = "stars.frag",
+)
+
 cc_binary(
     name = "skyfly",
     srcs = [
@@ -39,6 +49,8 @@ cc_binary(
         "skyfly.frag.spv",
         "skyfly.vert.spv",
         "starfield.png",
+        "stars.frag.spv",
+        "stars.vert.spv",
     ],
     linkopts = [
         "-lgflags",

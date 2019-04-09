@@ -43,13 +43,19 @@ struct UniformBufferObject {
 };
 
 spk::descriptor_set_layout create_descriptor_set_layout(spk::device& device) {
-  spk::descriptor_set_layout_binding binding;
-  binding.set_binding(0);
-  binding.set_descriptor_type(spk::descriptor_type::uniform_buffer);
-  binding.set_immutable_samplers({nullptr, 1});
-  binding.set_stage_flags(spk::shader_stage_flags::vertex);
+  spk::descriptor_set_layout_binding binding[2];
+  binding[0].set_binding(0);
+  binding[0].set_descriptor_type(spk::descriptor_type::uniform_buffer);
+  binding[0].set_immutable_samplers({nullptr, 1});
+  binding[0].set_stage_flags(spk::shader_stage_flags::vertex);
+
+  binding[1].set_binding(1);
+  binding[1].set_descriptor_type(spk::descriptor_type::combined_image_sampler);
+  binding[1].set_immutable_samplers({nullptr, 1});
+  binding[1].set_stage_flags(spk::shader_stage_flags::fragment);
+
   spk::descriptor_set_layout_create_info create_info;
-  create_info.set_bindings({&binding, 1});
+  create_info.set_bindings({binding, 2});
   return device.create_descriptor_set_layout(create_info);
 }
 
@@ -252,8 +258,9 @@ spk::pipeline_layout create_pipeline_layout(
   return device.create_pipeline_layout(create_info);
 }
 
-spk::pipeline create_pipeline(spk::device& device, spkx::presenter& presenter,
-                              spk::pipeline_layout& pipeline_layout) {
+spk::pipeline create_point_pipeline(spk::device& device,
+                                    spkx::presenter& presenter,
+                                    spk::pipeline_layout& pipeline_layout) {
   spkx::pipeline_config config;
   config.vertex_shader = "test/skyfly.vert.spv";
   config.fragment_shader = "test/skyfly.frag.spv";
@@ -262,6 +269,18 @@ spk::pipeline create_pipeline(spk::device& device, spkx::presenter& presenter,
   config.vertex_attribute_descriptions =
       get_vertex_input_attribute_descriptions();
   config.topology = spk::primitive_topology::point_list;
+  config.layout = pipeline_layout;
+
+  return spkx::create_pipeline(device, presenter, config);
+}
+
+[[maybe_unused]] spk::pipeline create_stars_pipeline(
+    spk::device& device, spkx::presenter& presenter,
+    spk::pipeline_layout& pipeline_layout) {
+  spkx::pipeline_config config;
+  config.vertex_shader = "test/stars.vert.spv";
+  config.fragment_shader = "test/stars.frag.spv";
+  config.topology = spk::primitive_topology::triangle_list;
   config.layout = pipeline_layout;
 
   return spkx::create_pipeline(device, presenter, config);
@@ -291,10 +310,12 @@ spk::descriptor_pool create_descriptor_pool(spk::device& device,
                                             uint32_t pool_size) {
   spk::descriptor_pool_create_info create_info;
   create_info.set_max_sets(pool_size);
-  spk::descriptor_pool_size size;
-  size.set_descriptor_count(pool_size);
-  size.set_type(spk::descriptor_type::uniform_buffer);
-  create_info.set_pool_sizes({&size, 1});
+  spk::descriptor_pool_size size[2];
+  size[0].set_descriptor_count(pool_size);
+  size[0].set_type(spk::descriptor_type::uniform_buffer);
+  size[1].set_descriptor_count(pool_size);
+  size[1].set_type(spk::descriptor_type::combined_image_sampler);
+  create_info.set_pool_sizes({size, 2});
   return device.create_descriptor_pool(create_info);
 }
 
@@ -309,11 +330,11 @@ std::vector<spk::descriptor_set> create_descriptor_sets(
 }
 
 struct ImageBuffer {
-  spk::buffer buffer;
-  spk::device_memory device_memory;
   uint64_t size;
   spk::image image;
   spk::device_memory image_memory;
+  spk::image_view image_view;
+  spk::sampler sampler;
 };
 
 spk::image create_image(spk::device& device, uint32_t width, uint32_t height,
@@ -337,16 +358,141 @@ spk::image create_image(spk::device& device, uint32_t width, uint32_t height,
   return device.create_image(create_info);
 }
 
+void immediate_copy_image(spk::device& device, spk::queue& transfer_queue,
+                          spk::queue& graphics_queue,
+                          uint32_t transfer_queue_family_index,
+                          uint32_t graphics_queue_family_index,
+                          spk::buffer& host_buffer, spk::image& image,
+                          uint32_t width, uint32_t height) {
+  spk::command_pool_create_info create_info;
+  create_info.set_flags(spk::command_pool_create_flags::transient);
+  create_info.set_queue_family_index(transfer_queue_family_index);
+  spk::command_pool command_pool = device.create_command_pool(create_info);
+
+  spk::command_buffer_allocate_info command_buffer_allocate_info;
+  command_buffer_allocate_info.set_command_pool(command_pool);
+  command_buffer_allocate_info.set_level(spk::command_buffer_level::primary);
+  command_buffer_allocate_info.set_command_buffer_count(1);
+  spk::command_buffer command_buffer = std::move(
+      device.allocate_command_buffers(command_buffer_allocate_info).at(0));
+
+  spk::command_buffer_begin_info begin_info;
+  begin_info.set_flags(spk::command_buffer_usage_flags::one_time_submit);
+  command_buffer.begin(begin_info);
+
+  {
+    spk::image_memory_barrier barrier;
+    barrier.set_old_layout(spk::image_layout::undefined);
+    barrier.set_new_layout(spk::image_layout::transfer_dst_optimal);
+    barrier.set_src_queue_family_index(spk::queue_family_ignored);
+    barrier.set_dst_queue_family_index(spk::queue_family_ignored);
+    barrier.set_image(image);
+    barrier.set_src_access_mask({});
+    barrier.set_dst_access_mask(spk::access_flags::transfer_write);
+
+    spk::image_subresource_range range;
+    range.set_aspect_mask(spk::image_aspect_flags::color);
+    range.set_level_count(1);
+    range.set_layer_count(1);
+    barrier.set_subresource_range(range);
+
+    command_buffer.pipeline_barrier(spk::pipeline_stage_flags::top_of_pipe,
+                                    spk::pipeline_stage_flags::transfer, {}, {},
+                                    {}, {&barrier, 1});
+  }
+
+  spk::buffer_image_copy region;
+
+  spk::image_subresource_layers layers;
+  layers.set_aspect_mask(spk::image_aspect_flags::color);
+  layers.set_layer_count(1);
+  region.set_image_subresource(layers);
+
+  spk::extent_3d extent;
+  extent.set_width(width);
+  extent.set_height(height);
+  extent.set_depth(1);
+  region.set_image_extent(extent);
+
+  command_buffer.copy_buffer_to_image(host_buffer, image,
+                                      spk::image_layout::transfer_dst_optimal,
+                                      {&region, 1});
+
+  {
+    spk::image_memory_barrier barrier;
+    barrier.set_old_layout(spk::image_layout::transfer_dst_optimal);
+    barrier.set_new_layout(spk::image_layout::shader_read_only_optimal);
+    barrier.set_src_queue_family_index(transfer_queue_family_index);
+    barrier.set_dst_queue_family_index(graphics_queue_family_index);
+    barrier.set_image(image);
+    barrier.set_src_access_mask(spk::access_flags::transfer_write);
+    barrier.set_dst_access_mask(spk::access_flags::shader_read);
+
+    spk::image_subresource_range range;
+    range.set_aspect_mask(spk::image_aspect_flags::color);
+    range.set_level_count(1);
+    range.set_layer_count(1);
+    barrier.set_subresource_range(range);
+
+    command_buffer.pipeline_barrier(spk::pipeline_stage_flags::transfer,
+                                    spk::pipeline_stage_flags::fragment_shader,
+                                    {}, {}, {}, {&barrier, 1});
+  }
+
+  command_buffer.end();
+  spk::submit_info submit_info;
+  spk::command_buffer_ref ref = command_buffer;
+  submit_info.set_command_buffers({&ref, 1});
+  transfer_queue.submit({&submit_info, 1}, VK_NULL_HANDLE);
+  transfer_queue.wait_idle();
+  command_pool.free_command_buffers({&ref, 1});
+}
+
+spk::image_view create_image_view(spk::device& device, spk::image& image) {
+  spk::image_view_create_info info;
+  info.set_image(image);
+  info.set_view_type(spk::image_view_type::n2d);
+  info.set_format(spk::format::r8g8b8a8_unorm);
+
+  spk::image_subresource_range range;
+  range.set_aspect_mask(spk::image_aspect_flags::color);
+  range.set_level_count(1);
+  range.set_layer_count(1);
+  info.set_subresource_range(range);
+
+  return device.create_image_view(info);
+}
+
+spk::sampler create_texture_sampler(spk::device& device) {
+  spk::sampler_create_info info;
+  info.set_mag_filter(spk::filter::linear);
+  info.set_min_filter(spk::filter::linear);
+  info.set_address_mode_u(spk::sampler_address_mode::repeat);
+  info.set_address_mode_v(spk::sampler_address_mode::repeat);
+  info.set_address_mode_w(spk::sampler_address_mode::repeat);
+  info.set_anisotropy_enable(true);
+  info.set_max_anisotropy(16);
+  info.set_border_color(spk::border_color::int_opaque_black);
+  info.set_unnormalized_coordinates(false);
+  info.set_compare_enable(true);
+  info.set_compare_op(spk::compare_op::always);
+  info.set_mipmap_mode(spk::sampler_mipmap_mode::linear);
+  return device.create_sampler(info);
+}
+
 ImageBuffer create_image_buffer(spk::physical_device& physical_device,
-                                spk::device& device) {
-  png::image<png::rgb_pixel, png::solid_pixel_buffer<png::rgb_pixel>> image(
+                                spk::device& device, spk::queue& transfer_queue,
+                                spk::queue& graphics_queue,
+                                uint32_t transfer_queue_family_index,
+                                uint32_t graphics_queue_family_index) {
+  png::image<png::rgba_pixel, png::solid_pixel_buffer<png::rgba_pixel>> image(
       "test/starfield.png");
   DVC_DUMP(image.get_width());
   DVC_DUMP(image.get_height());
 
   const std::vector<png::byte>& bytes = image.get_pixbuf().get_bytes();
 
-  DVC_ASSERT_EQ(image.get_width() * image.get_height() * 3, bytes.size());
+  DVC_ASSERT_EQ(image.get_width() * image.get_height() * 4, bytes.size());
 
   spk::buffer buffer = spkx::create_buffer(
       device, bytes.size(), spk::buffer_usage_flags::transfer_src);
@@ -366,8 +512,9 @@ ImageBuffer create_image_buffer(spk::physical_device& physical_device,
   std::memcpy(buf, bytes.data(), bytes.size());
   device_memory.unmap_memory();
 
-  spk::image device_image = create_image(
-      device, image.get_width(), image.get_height(), spk::format::r8g8b8_unorm);
+  spk::image device_image =
+      create_image(device, image.get_width(), image.get_height(),
+                   spk::format::r8g8b8a8_unorm);
 
   const spk::memory_requirements image_memory_requirements =
       device_image.memory_requirements();
@@ -379,22 +526,27 @@ ImageBuffer create_image_buffer(spk::physical_device& physical_device,
           spk::memory_property_flags::device_local));
   device_image.bind_memory(image_device_memory, 0);
 
-  return {std::move(buffer), std::move(device_memory),
-          memory_requirements.size(), std::move(device_image),
-          std::move(image_device_memory)};
-}
+  immediate_copy_image(device, transfer_queue, graphics_queue,
+                       transfer_queue_family_index, graphics_queue_family_index,
+                       buffer, device_image, image.get_width(),
+                       image.get_height());
 
-// void immediate_copy_image(spk::device& device) {
-//  spk::command_pool_create_info create_info;
-//  create_info.set_flags(value) spk::command_pool command_pool =
-//      device.create_command_pool();
-//}
+  device.free_memory(device_memory);
+
+  spk::image_view image_view = create_image_view(device, device_image);
+
+  spk::sampler sampler = create_texture_sampler(device);
+
+  return {memory_requirements.size(), std::move(device_image),
+          std::move(image_device_memory), std::move(image_view),
+          std::move(sampler)};
+}
 
 struct SkyFly : spkx::game {
   World world;
   spk::descriptor_set_layout descriptor_set_layout;
   spk::pipeline_layout pipeline_layout;
-  spk::pipeline pipeline;
+  spk::pipeline point_pipeline, stars_pipeline;
   std::vector<VertexBuffer> vertex_buffers;
   std::vector<UniformBuffer> uniform_buffers;
   ImageBuffer image_buffer;
@@ -407,12 +559,17 @@ struct SkyFly : spkx::game {
         descriptor_set_layout(create_descriptor_set_layout(device())),
         pipeline_layout(
             create_pipeline_layout(device(), descriptor_set_layout)),
-        pipeline(create_pipeline(device(), presenter(), pipeline_layout)),
+        point_pipeline(
+            create_point_pipeline(device(), presenter(), pipeline_layout)),
+        stars_pipeline(
+            create_stars_pipeline(device(), presenter(), pipeline_layout)),
         vertex_buffers(create_vertex_buffers(num_renderings(),
                                              physical_device(), device())),
         uniform_buffers(create_uniform_buffers(num_renderings(),
                                                physical_device(), device())),
-        image_buffer(create_image_buffer(physical_device(), device())),
+        image_buffer(create_image_buffer(
+            physical_device(), device(), transfer_queue(), graphics_queue(),
+            transfer_queue_family(), graphics_queue_family())),
         descriptor_pool(create_descriptor_pool(device(), num_renderings())),
         descriptor_sets(create_descriptor_sets(device(), descriptor_pool,
                                                descriptor_set_layout,
@@ -424,15 +581,30 @@ struct SkyFly : spkx::game {
       buffer_info.set_buffer(uniform_buffers[i].buffer);
       buffer_info.set_offset(0);
       buffer_info.set_range(sizeof(UniformBufferObject));
-      spk::write_descriptor_set write;
-      write.set_buffer_info({&buffer_info, 1});
-      write.set_descriptor_type(spk::descriptor_type::uniform_buffer);
-      write.set_dst_array_element(0);
-      write.set_dst_binding(0);
-      write.set_dst_set(descriptor_sets[i]);
-      write.set_image_info({nullptr, 1});
-      write.set_texel_buffer_view({nullptr, 1});
-      device().update_descriptor_sets({&write, 1}, {nullptr, 0});
+
+      spk::descriptor_image_info image_info;
+      image_info.set_image_layout(spk::image_layout::shader_read_only_optimal);
+      image_info.set_image_view(image_buffer.image_view);
+      image_info.set_sampler(image_buffer.sampler);
+
+      spk::write_descriptor_set write[2];
+      write[0].set_buffer_info({&buffer_info, 1});
+      write[0].set_descriptor_type(spk::descriptor_type::uniform_buffer);
+      write[0].set_dst_array_element(0);
+      write[0].set_dst_binding(0);
+      write[0].set_dst_set(descriptor_sets[i]);
+      write[0].set_image_info({nullptr, 1});
+      write[0].set_texel_buffer_view({nullptr, 1});
+
+      write[1].set_dst_set(descriptor_sets[i]);
+      write[1].set_dst_binding(1);
+      write[1].set_dst_array_element(0);
+      write[1].set_descriptor_type(
+          spk::descriptor_type::combined_image_sampler);
+
+      write[1].set_image_info({&image_info, 1});
+
+      device().update_descriptor_sets({write, 2}, {nullptr, 0});
     }
   }
 
@@ -460,19 +632,30 @@ struct SkyFly : spkx::game {
     clear_color.set_color(clear_color_value);
     render_pass_begin_info.set_clear_values({&clear_color, 1});
 
+    spk::descriptor_set_ref descriptor_set_ref =
+        descriptor_sets.at(rendering_index);
+
     command_buffer.begin_render_pass(render_pass_begin_info,
                                      spk::subpass_contents::inline_);
 
-    command_buffer.bind_pipeline(spk::pipeline_bind_point::graphics, pipeline);
+    command_buffer.bind_pipeline(spk::pipeline_bind_point::graphics,
+                                 stars_pipeline);
+    command_buffer.bind_descriptor_sets(spk::pipeline_bind_point::graphics,
+                                        pipeline_layout, 0,
+                                        {&descriptor_set_ref, 1}, {nullptr, 0});
+
+    command_buffer.draw(6, 1, 0, 0);
+
+    command_buffer.bind_pipeline(spk::pipeline_bind_point::graphics,
+                                 point_pipeline);
     spk::buffer_ref buffer_ref = current_buffer.buffer;
     uint64_t offset = 0;
     command_buffer.bind_vertex_buffers(0, 1, &buffer_ref, &offset);
-    spk::descriptor_set_ref descriptor_set_ref =
-        descriptor_sets.at(rendering_index);
     command_buffer.bind_descriptor_sets(spk::pipeline_bind_point::graphics,
                                         pipeline_layout, 0,
                                         {&descriptor_set_ref, 1}, {nullptr, 0});
     command_buffer.draw(::num_points, 1, 0, 0);
+
     command_buffer.end_render_pass();
   }
 
@@ -519,7 +702,7 @@ struct SkyFly : spkx::game {
   }
 
   ~SkyFly() {
-    device().free_memory(image_buffer.device_memory);
+    device().free_memory(image_buffer.image_memory);
     for (VertexBuffer& buffer : vertex_buffers) {
       buffer.unmap();
       device().free_memory(buffer.device_memory);
