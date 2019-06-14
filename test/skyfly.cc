@@ -37,25 +37,27 @@ struct Pipeline {
 };
 
 struct UniformBufferObject {
-  glm::mat4 model = glm::mat4(1.0);
-  glm::mat4 view = glm::mat4(1.0);
-  glm::mat4 proj = glm::mat4(1.0);
+  glm::mat4 mvp = glm::mat4(1.0);
+  glm::mat4 imvp = glm::mat4(1.0);
 };
 
 spk::descriptor_set_layout create_descriptor_set_layout(spk::device& device) {
-  spk::descriptor_set_layout_binding binding[2];
+  spk::descriptor_set_layout_binding binding[7];
   binding[0].set_binding(0);
   binding[0].set_descriptor_type(spk::descriptor_type::uniform_buffer);
   binding[0].set_immutable_samplers({nullptr, 1});
   binding[0].set_stage_flags(spk::shader_stage_flags::vertex);
 
-  binding[1].set_binding(1);
-  binding[1].set_descriptor_type(spk::descriptor_type::combined_image_sampler);
-  binding[1].set_immutable_samplers({nullptr, 1});
-  binding[1].set_stage_flags(spk::shader_stage_flags::fragment);
+  for (int face = 0; face < 6; face++) {
+    binding[face + 1].set_binding(face + 1);
+    binding[face + 1].set_descriptor_type(
+        spk::descriptor_type::combined_image_sampler);
+    binding[face + 1].set_immutable_samplers({nullptr, 1});
+    binding[face + 1].set_stage_flags(spk::shader_stage_flags::fragment);
+  }
 
   spk::descriptor_set_layout_create_info create_info;
-  create_info.set_bindings({binding, 2});
+  create_info.set_bindings({binding, 7});
   return device.create_descriptor_set_layout(create_info);
 }
 
@@ -313,7 +315,7 @@ spk::descriptor_pool create_descriptor_pool(spk::device& device,
   spk::descriptor_pool_size size[2];
   size[0].set_descriptor_count(pool_size);
   size[0].set_type(spk::descriptor_type::uniform_buffer);
-  size[1].set_descriptor_count(pool_size);
+  size[1].set_descriptor_count(pool_size * 6);
   size[1].set_type(spk::descriptor_type::combined_image_sampler);
   create_info.set_pool_sizes({size, 2});
   return device.create_descriptor_pool(create_info);
@@ -484,9 +486,10 @@ ImageBuffer create_image_buffer(spk::physical_device& physical_device,
                                 spk::device& device, spk::queue& transfer_queue,
                                 spk::queue& graphics_queue,
                                 uint32_t transfer_queue_family_index,
-                                uint32_t graphics_queue_family_index) {
+                                uint32_t graphics_queue_family_index,
+                                int face) {
   png::image<png::rgba_pixel, png::solid_pixel_buffer<png::rgba_pixel>> image(
-      "test/starfield.png");
+      dvc::concat("test/face", face, ".png"));
   DVC_DUMP(image.get_width());
   DVC_DUMP(image.get_height());
 
@@ -542,6 +545,19 @@ ImageBuffer create_image_buffer(spk::physical_device& physical_device,
           std::move(sampler)};
 }
 
+std::vector<ImageBuffer> create_image_buffers(
+    spk::physical_device& physical_device, spk::device& device,
+    spk::queue& transfer_queue, spk::queue& graphics_queue,
+    uint32_t transfer_queue_family_index,
+    uint32_t graphics_queue_family_index) {
+  std::vector<ImageBuffer> image_buffers;
+  for (int face = 0; face < 6; face++)
+    image_buffers.push_back(create_image_buffer(
+        physical_device, device, transfer_queue, graphics_queue,
+        transfer_queue_family_index, graphics_queue_family_index, face));
+  return std::move(image_buffers);
+}
+
 struct SkyFly : spkx::game {
   World world;
   spk::descriptor_set_layout descriptor_set_layout;
@@ -549,7 +565,7 @@ struct SkyFly : spkx::game {
   spk::pipeline point_pipeline, stars_pipeline;
   std::vector<VertexBuffer> vertex_buffers;
   std::vector<UniformBuffer> uniform_buffers;
-  ImageBuffer image_buffer;
+  std::vector<ImageBuffer> image_buffers;
   spk::descriptor_pool descriptor_pool;
   std::vector<spk::descriptor_set> descriptor_sets;
 
@@ -567,7 +583,7 @@ struct SkyFly : spkx::game {
                                              physical_device(), device())),
         uniform_buffers(create_uniform_buffers(num_renderings(),
                                                physical_device(), device())),
-        image_buffer(create_image_buffer(
+        image_buffers(create_image_buffers(
             physical_device(), device(), transfer_queue(), graphics_queue(),
             transfer_queue_family(), graphics_queue_family())),
         descriptor_pool(create_descriptor_pool(device(), num_renderings())),
@@ -582,12 +598,15 @@ struct SkyFly : spkx::game {
       buffer_info.set_offset(0);
       buffer_info.set_range(sizeof(UniformBufferObject));
 
-      spk::descriptor_image_info image_info;
-      image_info.set_image_layout(spk::image_layout::shader_read_only_optimal);
-      image_info.set_image_view(image_buffer.image_view);
-      image_info.set_sampler(image_buffer.sampler);
+      spk::descriptor_image_info image_info[6];
+      for (int face = 0; face < 6; face++) {
+        image_info[face].set_image_layout(
+            spk::image_layout::shader_read_only_optimal);
+        image_info[face].set_image_view(image_buffers[face].image_view);
+        image_info[face].set_sampler(image_buffers[face].sampler);
+      }
 
-      spk::write_descriptor_set write[2];
+      spk::write_descriptor_set write[7];
       write[0].set_buffer_info({&buffer_info, 1});
       write[0].set_descriptor_type(spk::descriptor_type::uniform_buffer);
       write[0].set_dst_array_element(0);
@@ -596,15 +615,17 @@ struct SkyFly : spkx::game {
       write[0].set_image_info({nullptr, 1});
       write[0].set_texel_buffer_view({nullptr, 1});
 
-      write[1].set_dst_set(descriptor_sets[i]);
-      write[1].set_dst_binding(1);
-      write[1].set_dst_array_element(0);
-      write[1].set_descriptor_type(
-          spk::descriptor_type::combined_image_sampler);
+      for (int face = 0; face < 6; face++) {
+        write[face + 1].set_dst_set(descriptor_sets[i]);
+        write[face + 1].set_dst_binding(face + 1);
+        write[face + 1].set_dst_array_element(0);
+        write[face + 1].set_descriptor_type(
+            spk::descriptor_type::combined_image_sampler);
 
-      write[1].set_image_info({&image_info, 1});
+        write[face + 1].set_image_info({image_info + face, 1});
+      }
 
-      device().update_descriptor_sets({write, 2}, {nullptr, 0});
+      device().update_descriptor_sets({write, 7}, {nullptr, 0});
     }
   }
 
@@ -621,9 +642,12 @@ struct SkyFly : spkx::game {
     current_buffer.update(world);
 
     UniformBufferObject ubo;
-    ubo.view = glm::lookAt(
+    glm::mat4 lookat = glm::lookAt(
         world.player.pos, world.player.pos + world.player.fac, world.player.up);
-    ubo.proj = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 100.0f);
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 100.0f);
+    ubo.mvp = proj * lookat;
+    ubo.imvp = glm::translate(-world.player.pos) * glm::inverse(ubo.mvp);
+
     uniform_buffer.update(ubo);
     spk::clear_color_value clear_color_value;
     clear_color_value.set_float_32({0, 0, 0, 1});
@@ -702,7 +726,8 @@ struct SkyFly : spkx::game {
   }
 
   ~SkyFly() {
-    device().free_memory(image_buffer.image_memory);
+    for (int face = 0; face < 6; face++)
+      device().free_memory(image_buffers[face].image_memory);
     for (VertexBuffer& buffer : vertex_buffers) {
       buffer.unmap();
       device().free_memory(buffer.device_memory);
