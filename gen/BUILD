@@ -12,3 +12,18 @@ cc_binary(
         "//dvc:program",
     ],
 )
+
+cc_binary(
+    name = "tracer",
+    srcs = [
+        "tracer.cc",
+    ],
+    linkopts = [
+        "-lpng",
+    ],
+    deps = [
+        "//dvc:file",
+        "//dvc:program",
+        "//dvc:python",
+    ],
+)
