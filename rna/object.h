@@ -5,11 +5,13 @@
 namespace rna {
 
 class Object {
+ public:
+  Object(const std::string& name) : name(name) {}
+
+  std::string name;
   Vec3 position;
-  Scalar radius;
   Vec3 velocity;
-  Vec3 rotation_axis;
-  Scalar rotation_rate;
+  Scalar radius;
 };
 
 }  // namespace rna
